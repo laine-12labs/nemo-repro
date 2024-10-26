@@ -12,19 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import datetime
+import json
+import warnings
+
+import oci
+from ocifs import OCIFileSystem
 from omegaconf.omegaconf import OmegaConf
 
-from nemo.collections.multimodal.models.multimodal_llm.neva.neva_model import MegatronNevaModel
+from nemo.collections.multimodal.models.multimodal_llm.neva.neva_model import (
+    MegatronNevaModel,
+)
 from nemo.collections.nlp.parts.megatron_trainer_builder import MegatronTrainerBuilder
 from nemo.core.config import hydra_runner
 from nemo.utils import logging
 from nemo.utils.exp_manager import exp_manager
-import warnings
-import datetime
-import oci
-import json
-from ocifs import OCIFileSystem
+
 warnings.filterwarnings("ignore", category=ResourceWarning)
+
+import multiprocessing as mp
+
+mp.set_start_method("spawn", force=True)
 
 
 def set_max_steps_from_streaming(cfg):
@@ -32,7 +40,6 @@ def set_max_steps_from_streaming(cfg):
         raise ValueError("Data path should be an oci path")
     if cfg.trainer.max_epochs == -1:
         raise ValueError("Max epochs should not be -1 when using streaming data")
-
 
     oci_config = oci.config.from_file()
     oci_fs = OCIFileSystem(oci_config, region=cfg.model.data.region)
@@ -45,13 +52,23 @@ def set_max_steps_from_streaming(cfg):
     for s in data["shards"]:
         total_data_samples += s["samples"]
 
-    cfg.model.global_batch_size = cfg.model.data.micro_batch_size * cfg.trainer.accumulate_grad_batches * cfg.trainer.devices * cfg.trainer.num_nodes // (cfg.model.tensor_model_parallel_size * cfg.model.pipeline_model_parallel_size * cfg.model.context_parallel_size)
+    cfg.model.global_batch_size = (
+        cfg.model.data.micro_batch_size
+        * cfg.trainer.accumulate_grad_batches
+        * cfg.trainer.devices
+        * cfg.trainer.num_nodes
+        // (
+            cfg.model.tensor_model_parallel_size
+            * cfg.model.pipeline_model_parallel_size
+            * cfg.model.context_parallel_size
+        )
+    )
     cfg.trainer.accumulate_grad_batches = 1
 
     steps_per_epoch = total_data_samples // cfg.model.global_batch_size
 
     max_steps = steps_per_epoch
-    
+
     cfg.trainer.max_steps = max_steps * cfg.trainer.max_epochs
     cfg.trainer.max_epochs = -1
 
@@ -59,7 +76,7 @@ def set_max_steps_from_streaming(cfg):
 @hydra_runner(config_path="conf", config_name="neva_config")
 def main(cfg) -> None:
     logging.info("\n\n************** Experiment configuration ***********")
-    logging.info(f'\n{OmegaConf.to_yaml(cfg)}')
+    logging.info(f"\n{OmegaConf.to_yaml(cfg)}")
     cur_datetime = datetime.datetime.now().strftime("%y%m%d-%H%M")
     cfg.exp_manager.name = cur_datetime
 
@@ -74,5 +91,5 @@ def main(cfg) -> None:
     trainer.fit(model)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
